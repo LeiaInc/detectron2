@@ -218,6 +218,9 @@ class VisImage:
         self.scale = scale
         self.width, self.height = img.shape[1], img.shape[0]
         self._setup_figure(img)
+        self.file_count = 0
+        self.threshold = 1
+        self.pixel_count = int(self.width * self.height * self.threshold / 100)
 
     def _setup_figure(self, img):
         """
@@ -253,8 +256,13 @@ class VisImage:
                 the visualized image will be saved.
         """
         if filepath.lower().endswith(".jpg") or filepath.lower().endswith(".png"):
-            # faster than matplotlib's imshow
-            cv2.imwrite(filepath, self.get_image()[:, :, ::-1])
+            # save only if the valid pixel count is greater than the threshold
+            result_mask = self.get_image()[:, :, ::-1]
+            result_mask = result_mask[:, :, 0]
+            valid_pixel_count = cv2.countNonZero(result_mask)
+            if valid_pixel_count >= self.pixel_count:
+                self.file_count = self.file_count + 1
+                cv2.imwrite(str(self.file_count) + ".png", self.get_image()[:, :, ::-1])
         else:
             # support general formats (e.g. pdf)
             self.ax.imshow(self.img, interpolation="nearest")
@@ -309,6 +317,7 @@ class Visualizer:
             metadata (MetadataCatalog): image metadata.
         """
         self.img = np.asarray(img_rgb).clip(0, 255).astype(np.uint8)
+        self.img.fill(0)
         self.metadata = metadata
         self.output = VisImage(self.img, scale=scale)
         self.cpu_device = torch.device("cpu")
@@ -558,7 +567,6 @@ class Visualizer:
                 assert len(keypoints) == num_instances
             else:
                 num_instances = len(keypoints)
-            keypoints = self._convert_keypoints(keypoints)
         if labels is not None:
             assert len(labels) == num_instances
         if assigned_colors is None:
@@ -580,67 +588,12 @@ class Visualizer:
         if areas is not None:
             sorted_idxs = np.argsort(-areas).tolist()
             # Re-order overlapped instances in descending order.
-            boxes = boxes[sorted_idxs] if boxes is not None else None
-            labels = [labels[k] for k in sorted_idxs] if labels is not None else None
             masks = [masks[idx] for idx in sorted_idxs] if masks is not None else None
-            assigned_colors = [assigned_colors[idx] for idx in sorted_idxs]
-            keypoints = keypoints[sorted_idxs] if keypoints is not None else None
 
         for i in range(num_instances):
-            color = assigned_colors[i]
-            if boxes is not None:
-                self.draw_box(boxes[i], edge_color=color)
-
             if masks is not None:
                 for segment in masks[i].polygons:
-                    self.draw_polygon(segment.reshape(-1, 2), color, alpha=alpha)
-
-            if labels is not None:
-                # first get a box
-                if boxes is not None:
-                    x0, y0, x1, y1 = boxes[i]
-                    text_pos = (x0, y0)  # if drawing boxes, put text on the box corner.
-                    horiz_align = "left"
-                elif masks is not None:
-                    x0, y0, x1, y1 = masks[i].bbox()
-
-                    # draw text in the center (defined by median) when box is not drawn
-                    # median is less sensitive to outliers.
-                    text_pos = np.median(masks[i].mask.nonzero(), axis=1)[::-1]
-                    horiz_align = "center"
-                else:
-                    continue  # drawing the box confidence for keypoints isn't very useful.
-                # for small objects, draw text at the side to avoid occlusion
-                instance_area = (y1 - y0) * (x1 - x0)
-                if (
-                    instance_area < _SMALL_OBJECT_AREA_THRESH * self.output.scale
-                    or y1 - y0 < 40 * self.output.scale
-                ):
-                    if y1 >= self.output.height - 5:
-                        text_pos = (x1, y0)
-                    else:
-                        text_pos = (x0, y1)
-
-                height_ratio = (y1 - y0) / np.sqrt(self.output.height * self.output.width)
-                lighter_color = self._change_color_brightness(color, brightness_factor=0.7)
-                font_size = (
-                    np.clip((height_ratio - 0.02) / 0.08 + 1, 1.2, 2)
-                    * 0.5
-                    * self._default_font_size
-                )
-                self.draw_text(
-                    labels[i],
-                    text_pos,
-                    color=lighter_color,
-                    horizontal_alignment=horiz_align,
-                    font_size=font_size,
-                )
-
-        # draw keypoints
-        if keypoints is not None:
-            for keypoints_per_instance in keypoints:
-                self.draw_and_connect_keypoints(keypoints_per_instance)
-
+                    self.draw_polygon(segment.reshape(-1, 2), (1,1,1), alpha=1)
         return self.output
 
     def overlay_rotated_instances(self, boxes=None, labels=None, assigned_colors=None):
@@ -1017,6 +970,10 @@ class Visualizer:
             linewidth=max(self._default_font_size // 15 * self.output.scale, 1),
         )
         self.output.ax.add_patch(polygon)
+        # save the current mask and reset the input image to all black
+        self.output.save(".png")
+        self.output.img.fill(0)
+        self.output._setup_figure(self.output.img)
         return self.output
 
     """
