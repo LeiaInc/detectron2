@@ -87,7 +87,18 @@ if __name__ == "__main__":
                     path, len(predictions["instances"]), time.time() - start_time
                 )
             )
-            
+
+            filename = os.path.basename(path)
+            filename = filename.split('.')[0]
+
+            output_file_dir = os.path.join(args.output, filename)
+            os.mkdir(output_file_dir)
+
+            result_masks = glob.glob("*.png")
+            for result_mask in result_masks:
+                result_file_name = os.path.basename(result_mask)
+                os.rename(result_mask, output_file_dir + "/" + result_file_name)
+
     elif args.webcam:
         assert args.input is None, "Cannot have both --input and --webcam!"
         cam = cv2.VideoCapture(0)
